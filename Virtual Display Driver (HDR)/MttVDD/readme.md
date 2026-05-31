@@ -12,3 +12,32 @@
 5. Click "Have Disk..." and click the "Browse..." button. Navigate to the extracted files and select the inf file.
 
 6. You are done! Go to display settings to customize the resolution of the additional displays. These displays show up in Oculus and should be able to be streamed from.
+
+## Per-monitor mode overrides (optional)
+
+The driver now supports defining mode lists per monitor in `vdd_settings.xml`.
+
+- Global sections (`<resolutions>` and `<global>`) still work exactly as before.
+- Per-monitor entries are optional and use 1-based monitor indices.
+- Any monitor without an override automatically falls back to the global mode list.
+
+Example:
+
+```xml
+<per_monitor_modes>
+    <monitor index="1">
+        <resolution>
+            <width>1920</width>
+            <height>1080</height>
+            <refresh_rate>60</refresh_rate>
+        </resolution>
+    </monitor>
+    <monitor index="2">
+        <resolution>
+            <width>2560</width>
+            <height>1440</height>
+            <refresh_rate>120</refresh_rate>
+        </resolution>
+    </monitor>
+</per_monitor_modes>
+```

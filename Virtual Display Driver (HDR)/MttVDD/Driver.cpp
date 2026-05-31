@@ -87,8 +87,12 @@ struct
 {
 	AdapterOption Adapter;
 } Options;
-vector<tuple<int, int, int, int>> monitorModes;
-vector< DISPLAYCONFIG_VIDEO_SIGNAL_INFO> s_KnownMonitorModes2;
+using MonitorMode = tuple<int, int, int, int>;
+
+vector<MonitorMode> monitorModes;
+vector<vector<MonitorMode>> monitorModesPerDisplay;
+vector<DISPLAYCONFIG_VIDEO_SIGNAL_INFO> s_KnownMonitorModes2;
+vector<vector<DISPLAYCONFIG_VIDEO_SIGNAL_INFO>> s_KnownMonitorModes2PerDisplay;
 UINT numVirtualDisplays;
 wstring gpuname;
 wstring confpath = L"C:\\VirtualDisplayDriver";
@@ -103,22 +107,154 @@ bool edidCeaOverride = false;
 bool sendLogsThroughPipe = true;
 
 constexpr DISPLAYCONFIG_VIDEO_SIGNAL_INFO dispinfo(UINT32 h, UINT32 v, UINT32 rn, UINT32 rd);
+void float_to_vsync(float refresh_rate, int& num, int& den);
 
 namespace
 {
-	void RebuildKnownMonitorModesCache()
+	void RebuildKnownMonitorModesCacheFor(const vector<MonitorMode>& sourceModes, vector<DISPLAYCONFIG_VIDEO_SIGNAL_INFO>& cache)
 	{
-		s_KnownMonitorModes2.clear();
-		s_KnownMonitorModes2.reserve(monitorModes.size());
-
-		for (const auto& mode : monitorModes)
+		cache.clear();
+		cache.reserve(sourceModes.size());
+		for (const auto& mode : sourceModes)
 		{
-			s_KnownMonitorModes2.push_back(
+			cache.push_back(
 				dispinfo(
 					std::get<0>(mode),
 					std::get<1>(mode),
 					std::get<2>(mode),
 					std::get<3>(mode)));
+		}
+	}
+
+	vector<MonitorMode> BuildUnionMonitorModes(const vector<vector<MonitorMode>>& perDisplayModes)
+	{
+		vector<MonitorMode> merged;
+		merged.reserve(64);
+
+		set<MonitorMode> seen;
+		for (const auto& displayModes : perDisplayModes)
+		{
+			for (const auto& mode : displayModes)
+			{
+				if (seen.insert(mode).second)
+				{
+					merged.push_back(mode);
+				}
+			}
+		}
+
+		return merged;
+	}
+
+	const vector<MonitorMode>& GetMonitorModesForIndex(unsigned int index)
+	{
+		if (index < monitorModesPerDisplay.size() && !monitorModesPerDisplay[index].empty())
+		{
+			return monitorModesPerDisplay[index];
+		}
+		return monitorModes;
+	}
+
+	void RebuildKnownMonitorModesCache()
+	{
+		if (!monitorModesPerDisplay.empty())
+		{
+			monitorModes = BuildUnionMonitorModes(monitorModesPerDisplay);
+		}
+
+		if (monitorModes.empty())
+		{
+			monitorModes.emplace_back(1920, 1080, 60000, 1000);
+		}
+
+		RebuildKnownMonitorModesCacheFor(monitorModes, s_KnownMonitorModes2);
+
+		s_KnownMonitorModes2PerDisplay.clear();
+		s_KnownMonitorModes2PerDisplay.resize(monitorModesPerDisplay.size());
+		for (size_t index = 0; index < monitorModesPerDisplay.size(); ++index)
+		{
+			RebuildKnownMonitorModesCacheFor(monitorModesPerDisplay[index], s_KnownMonitorModes2PerDisplay[index]);
+		}
+	}
+
+	vector<MonitorMode> BuildModeListFromResolutionsAndRefreshRates(
+		const set<tuple<int, int>>& resolutions,
+		const vector<int>& globalRefreshRates)
+	{
+		vector<MonitorMode> result;
+		for (int globalRate : globalRefreshRates)
+		{
+			for (const auto& resTuple : resolutions)
+			{
+				int global_width = get<0>(resTuple);
+				int global_height = get<1>(resTuple);
+				int vsync_num = 0;
+				int vsync_den = 0;
+				float_to_vsync(static_cast<float>(globalRate), vsync_num, vsync_den);
+				result.push_back(make_tuple(global_width, global_height, vsync_num, vsync_den));
+			}
+		}
+		return result;
+	}
+
+	bool TryParseMonitorIndexFromReader(IXmlReader* reader, int& outMonitorIndexZeroBased)
+	{
+		outMonitorIndexZeroBased = -1;
+		if (reader == nullptr)
+		{
+			return false;
+		}
+
+		HRESULT hr = reader->MoveToFirstAttribute();
+		if (FAILED(hr))
+		{
+			return false;
+		}
+
+		bool parsed = false;
+		do
+		{
+			const WCHAR* attrName = nullptr;
+			const WCHAR* attrValue = nullptr;
+			UINT attrNameLen = 0;
+			UINT attrValueLen = 0;
+			if (FAILED(reader->GetLocalName(&attrName, &attrNameLen)) || attrName == nullptr)
+			{
+				continue;
+			}
+			if (!(attrNameLen == 5 && _wcsnicmp(attrName, L"index", 5) == 0))
+			{
+				continue;
+			}
+			if (FAILED(reader->GetValue(&attrValue, &attrValueLen)) || attrValue == nullptr || attrValueLen == 0)
+			{
+				continue;
+			}
+
+			try
+			{
+				int xmlIndex = stoi(wstring(attrValue, attrValueLen));
+				if (xmlIndex > 0)
+				{
+					outMonitorIndexZeroBased = xmlIndex - 1;
+					parsed = true;
+				}
+			}
+			catch (...)
+			{
+				parsed = false;
+			}
+		} while (reader->MoveToNextAttribute() == S_OK);
+
+		reader->MoveToElement();
+		return parsed;
+	}
+
+	void EnsurePerDisplayModeStorageSize(size_t requiredSize)
+	{
+		if (monitorModesPerDisplay.size() < requiredSize)
+		{
+			monitorModesPerDisplay.resize(requiredSize);
 		}
 	}
 }
@@ -1345,6 +1481,7 @@ bool ApplyEdidProfile(const EdidProfileData& profile) {
 		
 		// Validate the final mode list
 		if (ValidateModeList(finalModes)) {
+			monitorModesPerDisplay.clear();
 			monitorModes = finalModes;
 			RebuildKnownMonitorModesCache();
 			
@@ -2548,6 +2685,7 @@ vector<string> split(string& input, char delimiter)
 
 
 void loadSettings() {
+	monitorModesPerDisplay.clear();
 	const wstring settingsname = confpath + L"\\vdd_settings.xml";
 	const wstring& filename = settingsname;
 	if (PathFileExistsW(filename.c_str())) {
@@ -2576,11 +2714,17 @@ void loadSettings() {
 		UINT cwchValue;
 		wstring currentElement;
 		wstring width, height, refreshRate;
-		vector<tuple<int, int, int, int>> res;
+		wstring monitorWidth, monitorHeight, monitorRefreshRate;
+		vector<MonitorMode> res;
+		map<int, vector<MonitorMode>> explicitPerMonitorModes;
+		map<int, set<tuple<int, int>>> perMonitorResolutions;
+		map<int, vector<int>> perMonitorGlobalRefreshRates;
 		wstring gpuFriendlyName;
 		UINT monitorcount = 1;
 		set<tuple<int, int>> resolutions;
 		vector<int> globalRefreshRates;
+		vector<wstring> elementStack;
+		int activeMonitorIndex = -1;
 
 		while (S_OK == (hr = pReader->Read(&nodeType))) {
 			switch (nodeType) {
@@ -2590,50 +2734,144 @@ void loadSettings() {
 					return;
 				}
 				currentElement = wstring(pwszLocalName, cwchLocalName);
+				elementStack.push_back(currentElement);
+				if (currentElement == L"monitor") {
+					activeMonitorIndex = -2;
+					int parsedMonitorIndex = -1;
+					if (TryParseMonitorIndexFromReader(pReader, parsedMonitorIndex)) {
+						activeMonitorIndex = parsedMonitorIndex;
+						EnsurePerDisplayModeStorageSize(static_cast<size_t>(activeMonitorIndex + 1));
+					}
+				}
+				if (pReader->IsEmptyElement()) {
+					if (currentElement == L"monitor") {
+						activeMonitorIndex = -1;
+					}
+					elementStack.pop_back();
+				}
 				break;
+			case XmlNodeType_EndElement:
+			{
+				const WCHAR* pwszEndName = nullptr;
+				UINT cwchEndName = 0;
+				if (SUCCEEDED(pReader->GetLocalName(&pwszEndName, &cwchEndName)) && pwszEndName != nullptr) {
+					wstring endElement(pwszEndName, cwchEndName);
+					if (endElement == L"monitor") {
+						activeMonitorIndex = -1;
+					}
+				}
+				if (!elementStack.empty()) {
+					elementStack.pop_back();
+				}
+				break;
+			}
 			case XmlNodeType_Text:
 				hr = pReader->GetValue(&pwszValue, &cwchValue);
 				if (FAILED(hr)) {
 					return;
 				}
+				if (elementStack.empty()) {
+					break;
+				}
+				currentElement = elementStack.back();
 				if (currentElement == L"count") {
-					monitorcount = stoi(wstring(pwszValue, cwchValue));
-					if (monitorcount == 0) {
+					try {
+						monitorcount = stoi(wstring(pwszValue, cwchValue));
+						if (monitorcount == 0) {
+							monitorcount = 1;
+							vddlog("i", "Loading singular monitor (Monitor Count is not valid)");
+						}
+					}
+					catch (...) {
 						monitorcount = 1;
-						vddlog("i", "Loading singular monitor (Monitor Count is not valid)");
+						vddlog("w", "Invalid monitor count value in XML. Falling back to 1.");
 					}
 				}
 				else if (currentElement == L"friendlyname") {
 					gpuFriendlyName = wstring(pwszValue, cwchValue);
 				}
 				else if (currentElement == L"width") {
-					width = wstring(pwszValue, cwchValue);
-					if (width.empty()) {
-						width = L"800";
+					if (activeMonitorIndex >= 0) {
+						monitorWidth = wstring(pwszValue, cwchValue);
+						if (monitorWidth.empty()) {
+							monitorWidth = L"800";
+						}
+					}
+					else if (activeMonitorIndex == -1) {
+						width = wstring(pwszValue, cwchValue);
+						if (width.empty()) {
+							width = L"800";
+						}
 					}
 				}
 				else if (currentElement == L"height") {
-					height = wstring(pwszValue, cwchValue);
-					if (height.empty()) {
-						height = L"600";
+					if (activeMonitorIndex >= 0) {
+						monitorHeight = wstring(pwszValue, cwchValue);
+						if (monitorHeight.empty()) {
+							monitorHeight = L"600";
+						}
+						if (monitorWidth.empty()) {
+							monitorWidth = L"800";
+						}
+						perMonitorResolutions[activeMonitorIndex].insert(make_tuple(stoi(monitorWidth), stoi(monitorHeight)));
 					}
-					resolutions.insert(make_tuple(stoi(width), stoi(height)));
+					else if (activeMonitorIndex == -1) {
+						height = wstring(pwszValue, cwchValue);
+						if (height.empty()) {
+							height = L"600";
+						}
+						if (width.empty()) {
+							width = L"800";
+						}
+						resolutions.insert(make_tuple(stoi(width), stoi(height)));
+					}
 				}
 				else if (currentElement == L"refresh_rate") {
-					refreshRate = wstring(pwszValue, cwchValue);
-					if (refreshRate.empty()) {
-						refreshRate = L"30";
+					if (activeMonitorIndex >= 0) {
+						monitorRefreshRate = wstring(pwszValue, cwchValue);
+						if (monitorRefreshRate.empty()) {
+							monitorRefreshRate = L"30";
+						}
+						if (monitorWidth.empty()) {
+							monitorWidth = L"800";
+						}
+						if (monitorHeight.empty()) {
+							monitorHeight = L"600";
+						}
+						int vsync_num = 0;
+						int vsync_den = 0;
+						float_to_vsync(stof(monitorRefreshRate), vsync_num, vsync_den);
+						explicitPerMonitorModes[activeMonitorIndex].push_back(
+							make_tuple(stoi(monitorWidth), stoi(monitorHeight), vsync_num, vsync_den));
 					}
-					int vsync_num, vsync_den;
-					float_to_vsync(stof(refreshRate), vsync_num, vsync_den);
+					else if (activeMonitorIndex == -1) {
+						refreshRate = wstring(pwszValue, cwchValue);
+						if (refreshRate.empty()) {
+							refreshRate = L"30";
+						}
+						if (width.empty()) {
+							width = L"800";
+						}
+						if (height.empty()) {
+							height = L"600";
+						}
+						int vsync_num = 0;
+						int vsync_den = 0;
+						float_to_vsync(stof(refreshRate), vsync_num, vsync_den);
 
-					res.push_back(make_tuple(stoi(width), stoi(height), vsync_num, vsync_den));
-					stringstream ss;
-					ss << "Added: " << stoi(width) << "x" << stoi(height) << " @ " << vsync_num << "/" << vsync_den << "Hz";
-					vddlog("d", ss.str().c_str());
+						res.push_back(make_tuple(stoi(width), stoi(height), vsync_num, vsync_den));
+						stringstream ss;
+						ss << "Added: " << stoi(width) << "x" << stoi(height) << " @ " << vsync_num << "/" << vsync_den << "Hz";
+						vddlog("d", ss.str().c_str());
+					}
 				}
 				else if (currentElement == L"g_refresh_rate") {
-					globalRefreshRates.push_back(stoi(wstring(pwszValue, cwchValue)));
+					if (activeMonitorIndex >= 0) {
+						perMonitorGlobalRefreshRates[activeMonitorIndex].push_back(stoi(wstring(pwszValue, cwchValue)));
+					}
+					else if (activeMonitorIndex == -1) {
+						globalRefreshRates.push_back(stoi(wstring(pwszValue, cwchValue)));
+					}
 				}
 				break;
 			}
@@ -2656,15 +2894,34 @@ void loadSettings() {
 		}
 		*/
 
-		for (int globalRate : globalRefreshRates) {
-			for (const auto& resTuple : resolutions) {
-				int global_width = get<0>(resTuple);
-				int global_height = get<1>(resTuple);
+		vector<MonitorMode> globalModesFromGlobalRates =
+			BuildModeListFromResolutionsAndRefreshRates(resolutions, globalRefreshRates);
+		res.insert(res.end(), globalModesFromGlobalRates.begin(), globalModesFromGlobalRates.end());
 
-				int vsync_num, vsync_den;
-				float_to_vsync(static_cast<float>(globalRate), vsync_num, vsync_den);
-				res.push_back(make_tuple(global_width, global_height, vsync_num, vsync_den));
+		for (const auto& entry : explicitPerMonitorModes) {
+			int monitorIndex = entry.first;
+			if (monitorIndex < 0) {
+				continue;
 			}
+			EnsurePerDisplayModeStorageSize(static_cast<size_t>(monitorIndex + 1));
+			monitorModesPerDisplay[monitorIndex] = entry.second;
+		}
+
+		for (const auto& entry : perMonitorGlobalRefreshRates) {
+			int monitorIndex = entry.first;
+			if (monitorIndex < 0) {
+				continue;
+			}
+			const auto resolutionsIt = perMonitorResolutions.find(monitorIndex);
+			if (resolutionsIt == perMonitorResolutions.end()) {
+				continue;
+			}
+
+			vector<MonitorMode> generated =
+				BuildModeListFromResolutionsAndRefreshRates(resolutionsIt->second, entry.second);
+			EnsurePerDisplayModeStorageSize(static_cast<size_t>(monitorIndex + 1));
+			auto& targetModes = monitorModesPerDisplay[monitorIndex];
+			targetModes.insert(targetModes.end(), generated.begin(), generated.end());
 		}
 
 		/*
@@ -2686,6 +2943,17 @@ void loadSettings() {
 		numVirtualDisplays = monitorcount;
 		gpuname = gpuFriendlyName;
 		monitorModes = res;
+		if (monitorModesPerDisplay.size() > numVirtualDisplays) {
+			monitorModesPerDisplay.resize(numVirtualDisplays);
+		}
+		if (numVirtualDisplays > 0 && monitorModesPerDisplay.size() < numVirtualDisplays) {
+			monitorModesPerDisplay.resize(numVirtualDisplays);
+		}
+		for (unsigned int index = 0; index < numVirtualDisplays; ++index) {
+			if (monitorModesPerDisplay[index].empty()) {
+				monitorModesPerDisplay[index] = monitorModes;
+			}
+		}
 		RebuildKnownMonitorModesCache();
 		
 		// === APPLY EDID INTEGRATION ===
@@ -3781,6 +4049,17 @@ void IndirectDeviceContext::FinishInit()
 	}
 }
 
+optional<unsigned int> IndirectDeviceContext::GetMonitorIndex(IDDCX_MONITOR Monitor) const
+{
+	lock_guard<mutex> lock(m_MonitorIndexMutex);
+	auto it = m_MonitorIndexByHandle.find(Monitor);
+	if (it == m_MonitorIndexByHandle.end())
+	{
+		return nullopt;
+	}
+	return it->second;
+}
+
 void IndirectDeviceContext::CreateMonitor(unsigned int index) {
 	wstring logMessage = L"Creating Monitor: " + to_wstring(index + 1);
 	string narrowLogMessage = WStringToString(logMessage);
@@ -3846,6 +4125,10 @@ void IndirectDeviceContext::CreateMonitor(unsigned int index) {
 	{
 		vddlog("d", "Monitor created successfully.");
 		m_Monitor = MonitorCreateOut.MonitorObject;
+		{
+			lock_guard<mutex> lock(m_MonitorIndexMutex);
+			m_MonitorIndexByHandle[m_Monitor] = index;
+		}
 
 		// Associate the monitor with this device context
 		auto* pContext = WdfObjectGet_IndirectDeviceContextWrapper(MonitorCreateOut.MonitorObject);
@@ -4170,25 +4453,39 @@ void CreateTargetMode2(IDDCX_TARGET_MODE2& Mode, UINT Width, UINT Height, UINT V
 _Use_decl_annotations_
 NTSTATUS VirtualDisplayDriverMonitorQueryModes(IDDCX_MONITOR MonitorObject, const IDARG_IN_QUERYTARGETMODES* pInArgs, IDARG_OUT_QUERYTARGETMODES* pOutArgs)////////////////////////////////////////////////////////////////////////////////
 {
-	UNREFERENCED_PARAMETER(MonitorObject);
+	unsigned int monitorIndex = 0;
+	bool hasMonitorIndex = false;
+	auto* wrapper = WdfObjectGet_IndirectDeviceContextWrapper(MonitorObject);
+	if (wrapper && wrapper->pContext) {
+		auto mapped = wrapper->pContext->GetMonitorIndex(MonitorObject);
+		if (mapped.has_value()) {
+			monitorIndex = mapped.value();
+			hasMonitorIndex = true;
+		}
+	}
 
-	vector<IDDCX_TARGET_MODE> TargetModes(monitorModes.size());
+	const vector<MonitorMode>& activeModes =
+		hasMonitorIndex ? GetMonitorModesForIndex(monitorIndex) : monitorModes;
+	vector<IDDCX_TARGET_MODE> TargetModes(activeModes.size());
 
 	stringstream logStream;
-	logStream << "Creating target modes. Number of monitor modes: " << monitorModes.size();
+	logStream << "Creating target modes. Number of monitor modes: " << activeModes.size();
+	if (hasMonitorIndex) {
+		logStream << ", monitor index: " << monitorIndex;
+	}
 	vddlog("d", logStream.str().c_str());
 
 	// Create a set of modes supported for frame processing and scan-out. These are typically not based on the
 	// monitor's descriptor and instead are based on the static processing capability of the device. The OS will
 	// report the available set of modes for a given output as the intersection of monitor modes with target modes.
 
-	for (int i = 0; i < monitorModes.size(); i++) {
-		CreateTargetMode(TargetModes[i], std::get<0>(monitorModes[i]), std::get<1>(monitorModes[i]), std::get<2>(monitorModes[i]), std::get<3>(monitorModes[i]));
+	for (size_t i = 0; i < activeModes.size(); i++) {
+		CreateTargetMode(TargetModes[i], std::get<0>(activeModes[i]), std::get<1>(activeModes[i]), std::get<2>(activeModes[i]), std::get<3>(activeModes[i]));
 
 		logStream.str("");
-		logStream << "Created target mode " << i << ": Width = " << std::get<0>(monitorModes[i])
-			<< ", Height = " << std::get<1>(monitorModes[i])
-			<< ", VSync = " << std::get<2>(monitorModes[i]);
+		logStream << "Created target mode " << i << ": Width = " << std::get<0>(activeModes[i])
+			<< ", Height = " << std::get<1>(activeModes[i])
+			<< ", VSync = " << std::get<2>(activeModes[i]);
 		vddlog("d", logStream.str().c_str());
 	}
 
@@ -4469,15 +4766,29 @@ NTSTATUS VirtualDisplayDriverEvtIddCxMonitorQueryTargetModes2(
 	IDARG_OUT_QUERYTARGETMODES* pOutArgs
 )
 {
-	//UNREFERENCED_PARAMETER(MonitorObject);
+	unsigned int monitorIndex = 0;
+	bool hasMonitorIndex = false;
+	auto* wrapper = WdfObjectGet_IndirectDeviceContextWrapper(MonitorObject);
+	if (wrapper && wrapper->pContext) {
+		auto mapped = wrapper->pContext->GetMonitorIndex(MonitorObject);
+		if (mapped.has_value()) {
+			monitorIndex = mapped.value();
+			hasMonitorIndex = true;
+		}
+	}
 	stringstream logStream;
 
 	logStream << "Querying target modes:"
 		<< "\n  MonitorObject Handle: " << static_cast<void*>(MonitorObject) 
 		<< "\n  TargetModeBufferInputCount: " << pInArgs->TargetModeBufferInputCount;
+	if (hasMonitorIndex) {
+		logStream << "\n  MonitorIndex: " << monitorIndex;
+	}
 	vddlog("d", logStream.str().c_str());
 
-	vector<IDDCX_TARGET_MODE2> TargetModes(monitorModes.size());
+	const vector<MonitorMode>& activeModes =
+		hasMonitorIndex ? GetMonitorModesForIndex(monitorIndex) : monitorModes;
+	vector<IDDCX_TARGET_MODE2> TargetModes(activeModes.size());
 
 	// Create a set of modes supported for frame processing and scan-out. These are typically not based on the
 	// monitor's descriptor and instead are based on the static processing capability of the device. The OS will
@@ -4486,12 +4797,12 @@ NTSTATUS VirtualDisplayDriverEvtIddCxMonitorQueryTargetModes2(
 	logStream.str(""); // Clear the stream
 	logStream << "Creating target modes:";
 
-	for (int i = 0; i < monitorModes.size(); i++) {
-		CreateTargetMode2(TargetModes[i], std::get<0>(monitorModes[i]), std::get<1>(monitorModes[i]), std::get<2>(monitorModes[i]), std::get<3>(monitorModes[i]));
+	for (size_t i = 0; i < activeModes.size(); i++) {
+		CreateTargetMode2(TargetModes[i], std::get<0>(activeModes[i]), std::get<1>(activeModes[i]), std::get<2>(activeModes[i]), std::get<3>(activeModes[i]));
 		logStream << "\n  TargetModeIndex: " << i
-			<< "\n    Width: " << std::get<0>(monitorModes[i])
-			<< "\n    Height: " << std::get<1>(monitorModes[i])
-			<< "\n    RefreshRate: " << std::get<2>(monitorModes[i]);
+			<< "\n    Width: " << std::get<0>(activeModes[i])
+			<< "\n    Height: " << std::get<1>(activeModes[i])
+			<< "\n    RefreshRate: " << std::get<2>(activeModes[i]);
 	}
 	vddlog("d", logStream.str().c_str());
 

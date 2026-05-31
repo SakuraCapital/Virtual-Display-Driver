@@ -18,6 +18,7 @@
 #include <mutex>
 #include <string>
 #include <sstream>
+#include <optional>
 
 #include "Trace.h"
 
@@ -114,6 +115,7 @@ namespace Microsoft
             void FinishInit();
 
             void CreateMonitor(unsigned int index);
+            std::optional<unsigned int> GetMonitorIndex(IDDCX_MONITOR Monitor) const;
 
             void AssignSwapChain(IDDCX_MONITOR Monitor, IDDCX_SWAPCHAIN SwapChain, LUID RenderAdapter, HANDLE NewFrameEvent);
             void UnassignSwapChain(IDDCX_MONITOR Monitor);
@@ -127,6 +129,8 @@ namespace Microsoft
 
             std::map<IDDCX_MONITOR, std::unique_ptr<SwapChainProcessor>> m_ProcessingThreads;
             std::mutex m_ProcessingThreadsMutex;
+            mutable std::mutex m_MonitorIndexMutex;
+            std::map<IDDCX_MONITOR, unsigned int> m_MonitorIndexByHandle;
 
         public:
             static const DISPLAYCONFIG_VIDEO_SIGNAL_INFO s_KnownMonitorModes[];

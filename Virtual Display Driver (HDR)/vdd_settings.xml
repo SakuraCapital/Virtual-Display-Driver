@@ -46,6 +46,33 @@
         </resolution>
     </resolutions>
 
+    <!-- === OPTIONAL PER-MONITOR MODE OVERRIDES ===
+         If one or more <monitor index="N"> entries are present below, each monitor can
+         use its own mode list (width/height/refresh_rate and/or g_refresh_rate).
+         index is 1-based and maps to the monitor creation order.
+         Missing monitors automatically fall back to the global <resolutions>/<global> list.
+    -->
+    <!--
+    <per_monitor_modes>
+        <monitor index="1">
+            <resolution>
+                <width>1920</width>
+                <height>1080</height>
+                <refresh_rate>60</refresh_rate>
+            </resolution>
+        </monitor>
+        <monitor index="2">
+            <resolution>
+                <width>2560</width>
+                <height>1440</height>
+                <refresh_rate>120</refresh_rate>
+            </resolution>
+            <g_refresh_rate>60</g_refresh_rate>
+            <g_refresh_rate>90</g_refresh_rate>
+        </monitor>
+    </per_monitor_modes>
+    -->
+
     <!-- === LOGGING CONFIGURATION === -->
     <logging>
         <SendLogsThroughPipe>true</SendLogsThroughPipe>
