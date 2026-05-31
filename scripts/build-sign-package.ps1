@@ -94,6 +94,9 @@ function Ensure-CatalogExists {
 
     Write-Host "Catalog missing. Running Inf2Cat..."
     & $Inf2CatExe /driver:"$PackageDir" /os:$OsSpec /uselocaltime /verbose
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inf2Cat failed with exit code $LASTEXITCODE."
+    }
 
     if (-not (Test-Path $catPath)) {
         throw "Inf2Cat completed but catalog is still missing: $catPath"
@@ -132,6 +135,9 @@ if (-not $NoBuild) {
 
     Write-Host "Building driver project..."
     & $msbuild $vcxproj /t:Rebuild /p:Configuration=$Configuration /p:Platform=$Platform /p:PreferredToolArchitecture=x64
+    if ($LASTEXITCODE -ne 0) {
+        throw "MSBuild failed with exit code $LASTEXITCODE. Fix compile/link errors before packaging."
+    }
 }
 
 if (-not (Test-Path $packageDir)) {
@@ -160,9 +166,15 @@ if (-not $NoSign) {
 
     Write-Host "Signing catalog: $catPath"
     & $signtool sign /v /fd SHA256 /s My /sm /n $CertSubject /tr http://timestamp.digicert.com /td SHA256 $catPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "SignTool sign failed with exit code $LASTEXITCODE."
+    }
 
     Write-Host "Verifying signature..."
     & $signtool verify /v /pa $catPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "SignTool verify failed with exit code $LASTEXITCODE."
+    }
 }
 
 Write-Host ""

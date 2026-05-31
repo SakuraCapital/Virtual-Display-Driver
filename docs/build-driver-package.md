@@ -79,6 +79,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-sign-package.ps1 -Inf2C
 
 Install ATL/MFC components for `MSVC v143 (x64/x86)` in Visual Studio Installer.
 
+### `C4819` / `C2220` on `Driver.cpp`
+
+The compiler cannot represent some source characters in the current code page and `/WX` promotes the warning to an error.
+
+Recommended fix:
+
+- Open `Virtual Display Driver (HDR)\MttVDD\Driver.cpp` in Visual Studio
+- Save As with UTF-8 encoding (prefer UTF-8 with BOM)
+- Re-run the script
+
 ### `MSB8036: Windows SDK version ... not found`
 
 Install required Windows SDK/WDK version or retarget project SDK.
