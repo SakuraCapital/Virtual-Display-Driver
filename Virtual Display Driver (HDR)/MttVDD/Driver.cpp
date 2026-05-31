@@ -851,7 +851,7 @@ struct VddHdrMetadata {
     UINT16 white_point_x = 0;               // White point x coordinate
     UINT16 white_point_y = 0;               // White point y coordinate
     
-    // Luminance values (0.0001 cd/m² units for SMPTE ST.2086)
+    // Luminance values (0.0001 cd/m^2 units for SMPTE ST.2086)
     UINT32 max_display_mastering_luminance = 0;
     UINT32 min_display_mastering_luminance = 0;
     
@@ -877,7 +877,7 @@ UINT16 ConvertChromaticityToSmpte(double edidValue) {
     return static_cast<UINT16>(edidValue * 50000.0);
 }
 
-// Convert EDID luminance (nits) to SMPTE ST.2086 format (0.0001 cd/m² units)
+// Convert EDID luminance (nits) to SMPTE ST.2086 format (0.0001 cd/m^2 units)
 UINT32 ConvertLuminanceToSmpte(double nits) {
     // Clamp to reasonable range (0.0001 to 10000 nits)
     if (nits < 0.0001) nits = 0.0001;
@@ -1402,13 +1402,13 @@ bool ApplyEdidProfile(const EdidProfileData& profile) {
 			stringstream ss;
 			ss << "Generated SMPTE ST.2086 HDR metadata from EDID profile:\n"
 			   << "  Red: (" << hdrMetadata.display_primaries_x[0] << ", " << hdrMetadata.display_primaries_y[0] << ") "
-			   << "→ (" << profile.redX << ", " << profile.redY << ")\n"
+			   << "-> (" << profile.redX << ", " << profile.redY << ")\n"
 			   << "  Green: (" << hdrMetadata.display_primaries_x[1] << ", " << hdrMetadata.display_primaries_y[1] << ") "
-			   << "→ (" << profile.greenX << ", " << profile.greenY << ")\n"
+			   << "-> (" << profile.greenX << ", " << profile.greenY << ")\n"
 			   << "  Blue: (" << hdrMetadata.display_primaries_x[2] << ", " << hdrMetadata.display_primaries_y[2] << ") "
-			   << "→ (" << profile.blueX << ", " << profile.blueY << ")\n"
+			   << "-> (" << profile.blueX << ", " << profile.blueY << ")\n"
 			   << "  White Point: (" << hdrMetadata.white_point_x << ", " << hdrMetadata.white_point_y << ") "
-			   << "→ (" << profile.whiteX << ", " << profile.whiteY << ")\n"
+			   << "-> (" << profile.whiteX << ", " << profile.whiteY << ")\n"
 			   << "  Max Luminance: " << hdrMetadata.max_display_mastering_luminance 
 			   << " (" << profile.maxLuminance << " nits)\n"
 			   << "  Min Luminance: " << hdrMetadata.min_display_mastering_luminance 
@@ -4352,8 +4352,8 @@ NTSTATUS VirtualDisplayDriverEvtIddCxMonitorSetDefaultHdrMetadata(
 			  << "Green Primary: (" << metadata.display_primaries_x[1] << ", " << metadata.display_primaries_y[1] << ")\n" 
 			  << "Blue Primary: (" << metadata.display_primaries_x[2] << ", " << metadata.display_primaries_y[2] << ")\n"
 			  << "White Point: (" << metadata.white_point_x << ", " << metadata.white_point_y << ")\n"
-			  << "Max Mastering Luminance: " << metadata.max_display_mastering_luminance << " (0.0001 cd/m² units)\n"
-			  << "Min Mastering Luminance: " << metadata.min_display_mastering_luminance << " (0.0001 cd/m² units)\n"
+			  << "Max Mastering Luminance: " << metadata.max_display_mastering_luminance << " (0.0001 cd/m^2 units)\n"
+			  << "Min Mastering Luminance: " << metadata.min_display_mastering_luminance << " (0.0001 cd/m^2 units)\n"
 			  << "Max Content Light Level: " << metadata.max_content_light_level << " nits\n"
 			  << "Max Frame Average Light Level: " << metadata.max_frame_avg_light_level << " nits";
 	vddlog("i", logStream.str().c_str());
